@@ -6502,4 +6502,111 @@ input,textarea{-webkit-appearance:none;appearance:none;opacity:1;}
  v.addEventListener('scroll',sync,{passive:true});
 })();
 </script>
+<style id="unified-phone-desktop-mobile">
+
+/* Desktop-reference phone geometry: do not squash the phone on mobile.
+   The whole 384 x 826 device is scaled uniformly as one unit. */
+:root{--unified-phone-scale:1}
+.stage{min-width:0;min-height:0;overflow:visible}
+.stage>.phone{
+  width:384px !important;
+  min-width:384px !important;
+  max-width:384px !important;
+  height:826px !important;
+  min-height:826px !important;
+  max-height:826px !important;
+  flex:0 0 384px;
+  padding:11px !important;
+  border-radius:62px !important;
+  transform:scale(var(--unified-phone-scale));
+  transform-origin:center center;
+}
+.stage>.phone>.screen{border-radius:51px !important}
+.stage>.phone>.hw{display:block !important}
+/* Photo viewer uses its intrinsic image aspect ratio with NO cropping or stretching. */
+.app-photoDetail .photo-detail-stage{min-height:0;min-width:0;overflow:hidden}
+.app-photoDetail .photo-detail-original{
+  display:block;
+  width:100%;
+  height:100%;
+  max-width:100%;
+  max-height:100%;
+  object-fit:contain !important;
+  object-position:center center;
+}
+/* Keep the photos filmstrip/header exactly at desktop sizes, independent of viewport media rules. */
+.app-photoDetail .photo-detail-head{padding-left:12px !important;padding-right:12px !important}
+.app-photoDetail .photo-film-tile{width:23px !important;flex-basis:23px !important}
+.app-photoDetail .photo-film-tile.selected{width:27px !important;flex-basis:27px !important}
+
+/* A consistent set of compact call controls on desktop, Android and iPhone. */
+.dial-call-page .call-grid{
+  gap:18px 12px;
+  padding:0 12px 9px;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  justify-items:center;
+}
+.dial-call-page .call-tool{min-width:0;width:100%;align-items:center}
+.dial-call-page .call-tool button,
+.dial-call-page .dial-hangup{
+  flex:none;
+  width:64px !important;
+  height:64px !important;
+  min-width:64px;
+  min-height:64px;
+  border-radius:50%;
+  padding:0;
+}
+.dial-call-page .call-tool button svg{width:28px !important;height:28px !important}
+.dial-call-page .dial-hangup svg{width:30px !important;height:30px !important}
+.dial-call-page .call-tool .lbl{font-size:11px;line-height:1.25;margin-top:7px}
+/* When an on-screen keyboard opens, keep the existing mobile composer behavior.
+   The fixed-reference device layout resumes once input focus is released. */
+@media(max-width:520px){
+  .stage{overflow:hidden}
+  body.kakao-mobile-keyboard .stage>.phone{
+    width:min(384px,calc(100% - 10px)) !important;
+    min-width:0 !important;
+    max-width:none !important;
+    height:min(826px,calc(100% - 10px)) !important;
+    min-height:0 !important;
+    max-height:none !important;
+    flex:0 1 auto;
+    transform:none !important;
+    border-radius:42px !important;
+    padding:7px !important;
+  }
+  body.kakao-mobile-keyboard .stage>.phone>.screen{border-radius:35px !important}
+  body.kakao-mobile-keyboard .stage>.phone>.hw{display:none !important}
+}
+
+</style>
+<script id="unified-phone-scaling">
+
+/* Resize only the OUTER device, never its internal PC-reference coordinate system.
+   A mobile viewport cannot display 826 CSS px of height; uniformly scale to fit. */
+(function(){
+ const root=document.documentElement;
+ let raf=0;
+ function fit(){
+  raf=0;
+  if(document.body.classList.contains('kakao-mobile-keyboard'))return;
+  const stage=document.querySelector('.stage');
+  if(!stage)return;
+  const rect=stage.getBoundingClientRect();
+  const maxWidth=Math.max(100,rect.width-10);
+  const maxHeight=Math.max(100,rect.height-10);
+  const scale=Math.max(.28,Math.min(1,maxWidth/384,maxHeight/826));
+  root.style.setProperty('--unified-phone-scale',String(Math.round(scale*10000)/10000));
+ }
+ function requestFit(){if(!raf)raf=requestAnimationFrame(fit)}
+ window.addEventListener('resize',requestFit,{passive:true});
+ window.addEventListener('orientationchange',requestFit,{passive:true});
+ if(window.visualViewport){window.visualViewport.addEventListener('resize',requestFit,{passive:true})}
+ document.addEventListener('focusout',()=>requestAnimationFrame(requestFit),true);
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',requestFit,{once:true});
+ else requestFit();
+})();
+
+</script>
 </body></html>
