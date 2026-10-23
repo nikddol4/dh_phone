@@ -1339,6 +1339,9 @@ button{font:inherit;color:inherit}
 .homebtn::after{content:"";position:absolute;left:18px;right:18px;bottom:8px;height:5px;border-radius:3px;background:rgba(0,0,0,.85);transition:transform .15s}
 .homebtn:hover::after{transform:scaleX(1.06)}
 .homebtn.light::after{background:rgba(255,255,255,.95)}
+/* Keep the iPhone gesture bar draggable instead of selecting or scrolling it. */
+.homebtn{touch-action:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+.homebtn.swipe-in-progress::after{transform:translateY(-3px) scaleX(1.07)}
 
 .wall{position:absolute;inset:0;z-index:0;transition:filter .45s ease,transform .45s ease}
 .wall svg{width:100%;height:100%;display:block}
@@ -6093,31 +6096,104 @@ viewsEl.addEventListener('pointerup',e=>{
   const btn=igTouchStage.querySelector(delta<0?'.ig-slide-next':'.ig-slide-prev');if(btn)btn.click();
  }
 });
-let y0=null,mode=null;
-screenEl.addEventListener('pointerdown',e=>{
- const s=screenEl.getBoundingClientRect();
- if(state.stack[0].v==='lock'&&!unlocking){
-  // Native scrolling takes priority within the lock-screen notification panel.
-  // Do not interpret a notification scroll as an unlock swipe.
-  if(e.target.closest('.notifs')){y0=null;mode=null;return;}
-  y0=e.clientY;mode='lock';
+/* Native-feeling gestures: touch events are used on iOS/Android because a
+   browser's vertical-pan recognition can cancel a pointer gesture mid-swipe.
+   Pointer events are retained for trackpad / mouse / pen interaction on PC. */
+let deviceSwipe=null;
+function beginDeviceSwipe(x,y,target,source,id){
+ if(birthdayBlackoutInProgress)return false;
+ const current=state.stack[state.stack.length-1]?.v;
+ let action=null;
+ if(current==='lock'&&!unlocking){
+  // Only the expanded notification scroller should take its own vertical pans.
+  if(target.closest?.('.notifs.is-expanded'))return false;
+  action='unlock';
+ }else if(current!=='home'&&current!=='lock'){
+  const bar=homeBtn.getBoundingClientRect();
+  const onBar=target===homeBtn||homeBtn.contains(target);
+  const nearBar=x>=bar.left-12&&x<=bar.right+12&&y>=bar.top-8&&y<=bar.bottom+10;
+  if(onBar||nearBar)action='home';
  }
- else if(e.clientY>s.bottom-46&&state.stack[state.stack.length-1].v!=='home'){y0=e.clientY;mode='home'}
+ if(!action)return false;
+ deviceSwipe={x,y,action,source,id,active:false};
+ return true;
+}
+function moveDeviceSwipe(x,y){
+ const g=deviceSwipe;
+ if(!g)return;
+ const dx=x-g.x,dy=y-g.y;
+ if(dy>=-7||Math.abs(dy)<Math.abs(dx)*1.2)return;
+ g.active=true;
+ if(g.action==='unlock'){
+  const lockView=viewsEl.firstElementChild;
+  if(lockView&&!reduce)lockView.style.transform=`translate3d(0,${Math.max(-85,dy*.38)}px,0)`;
+ }else if(g.action==='home'){
+  homeBtn.classList.add('swipe-in-progress');
+ }
+}
+function finishDeviceSwipe(x,y,source,id,event){
+ const g=deviceSwipe;
+ if(!g||g.source!==source||(id!==undefined&&g.id!==id))return;
+ deviceSwipe=null;
+ homeBtn.classList.remove('swipe-in-progress');
+ const dx=x-g.x,dy=y-g.y;
+ const scale=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--unified-phone-scale'))||1;
+ const threshold=g.action==='unlock'?Math.max(28,48*scale):Math.max(23,36*scale);
+ const completed=dy<=-threshold&&Math.abs(dy)>Math.abs(dx)*1.15;
+ const lockView=viewsEl.firstElementChild;
+ if(g.action==='unlock'&&lockView)lockView.style.transform='';
+ if(!completed)return;
+ if(event?.cancelable)event.preventDefault();
+ lastSwipe=Date.now();
+ if(g.action==='unlock')unlock();
+ else goHome();
+}
+function cancelDeviceSwipe(){
+ const g=deviceSwipe;deviceSwipe=null;
+ homeBtn.classList.remove('swipe-in-progress');
+ if(g?.action==='unlock'){
+  const lockView=viewsEl.firstElementChild;
+  if(lockView)lockView.style.transform='';
+ }
+}
+// Mobile Safari + Android Chrome: do not let native scrolling steal the gesture.
+screenEl.addEventListener('touchstart',e=>{
+ if(e.touches.length!==1)return;
+ const t=e.touches[0];
+ beginDeviceSwipe(t.clientX,t.clientY,e.target,'touch',t.identifier);
+},{passive:true});
+screenEl.addEventListener('touchmove',e=>{
+ const g=deviceSwipe;
+ if(!g||g.source!=='touch')return;
+ const t=Array.from(e.changedTouches).find(t=>t.identifier===g.id);
+ if(!t)return;
+ const dx=t.clientX-g.x,dy=t.clientY-g.y;
+ if(dy<-9&&Math.abs(dy)>Math.abs(dx)*1.1&&e.cancelable)e.preventDefault();
+ moveDeviceSwipe(t.clientX,t.clientY);
+},{passive:false});
+screenEl.addEventListener('touchend',e=>{
+ const g=deviceSwipe;
+ if(!g||g.source!=='touch')return;
+ const t=Array.from(e.changedTouches).find(t=>t.identifier===g.id);
+ if(t)finishDeviceSwipe(t.clientX,t.clientY,'touch',t.identifier,e);
+},{passive:false});
+screenEl.addEventListener('touchcancel',cancelDeviceSwipe,{passive:true});
+// Desktop: click-and-drag on the home bar, or drag upwards on the lock screen.
+screenEl.addEventListener('pointerdown',e=>{
+ if(e.pointerType==='touch')return;
+ if(beginDeviceSwipe(e.clientX,e.clientY,e.target,'pointer',e.pointerId)&&e.target===homeBtn){
+  try{homeBtn.setPointerCapture(e.pointerId);}catch(_){}
+ }
 });
 window.addEventListener('pointermove',e=>{
- if(y0===null||mode!=='lock') return;
- const dy=Math.min(0,e.clientY-y0),el=viewsEl.firstElementChild;
- if(el&&!reduce) el.style.transform=`translateY(${dy*.7}px)`;
+ if(deviceSwipe?.source==='pointer'&&deviceSwipe.id===e.pointerId)moveDeviceSwipe(e.clientX,e.clientY);
 });
 window.addEventListener('pointerup',e=>{
- if(y0===null) return;
- const dy=e.clientY-y0,m=mode;y0=null;mode=null;
- const el=viewsEl.firstElementChild;
- if(m==='lock'){if(dy<-50) unlock(); else if(el) el.style.transform=''}
- else if(m==='home'&&dy<-30){lastSwipe=Date.now();goHome()}
+ if(deviceSwipe?.source==='pointer')finishDeviceSwipe(e.clientX,e.clientY,'pointer',e.pointerId,e);
 });
-window.addEventListener('pointercancel',()=>{y0=null;mode=null;const el=viewsEl.firstElementChild;if(el&&state.stack[0].v==='lock')el.style.transform=''});
-
+window.addEventListener('pointercancel',e=>{
+ if(deviceSwipe?.source==='pointer'&&deviceSwipe.id===e.pointerId)cancelDeviceSwipe();
+});
 
 // Swipe horizontally across the calendar grid to browse months.
 let calSwipeStart=null;
