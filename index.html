@@ -113,6 +113,14 @@ button.kf-self:active{background:#f7f7f7}
 .photo-tile-fav{position:absolute;left:8px;bottom:8px;width:16px;height:16px;display:grid;place-items:center;z-index:2;color:#fff;filter:drop-shadow(0 1px 2px rgba(0,0,0,.35));pointer-events:none}
 .photo-tile-fav svg{display:block;width:16px;height:16px;fill:currentColor;stroke:none}
 
+
+/* Smooth, touch-following photo carousel; the photo stage keeps its existing geometry. */
+.photo-detail-stage{touch-action:pan-y;overscroll-behavior-x:contain}
+.photo-swipe-track{position:absolute;inset:0 auto 0 0;display:flex;width:300%;height:100%;min-height:0;transform:translate3d(-33.333333%,0,0);will-change:transform;backface-visibility:hidden;-webkit-backface-visibility:hidden;pointer-events:none;z-index:1}
+.photo-swipe-panel{position:relative;width:33.333333333%;flex:0 0 33.333333333%;height:100%;min-width:0;min-height:0;overflow:hidden;display:flex;align-items:center;justify-content:center}
+.photo-swipe-image,.app-photoDetail .photo-swipe-image{display:block;width:100%;height:100%;max-width:100%;max-height:100%;object-fit:cover !important;object-position:center center;pointer-events:none;user-select:none;-webkit-user-drag:none;backface-visibility:hidden;-webkit-backface-visibility:hidden}
+@media(prefers-reduced-motion:reduce){.photo-swipe-track{will-change:auto}}
+
 /* iPhone-like full photo viewer. Original media fills the stage without cropping. */
 .app-photoDetail{background:#fff;color:#111}
 /* iOS-style photo viewer; image area remains crisp and aspect-ratio safe */
@@ -3865,7 +3873,11 @@ function vPhotoDetail({index=0}={}){
    <button type="button" class="photo-detail-more" data-photo-menu aria-label="사진 옵션 더 보기">···</button>
   </header>
   <div class="photo-detail-stage" aria-label="사진 원본 크게 보기" data-photo-swipe>
-   <img class="photo-detail-original" src="${src}" alt="사진 ${i+1} 원본" decoding="async" draggable="false">
+   <div class="photo-swipe-track" data-photo-track>
+    <div class="photo-swipe-panel">${i>0?`<img class="photo-swipe-image" src="${PHOTO_ITEMS[i-1]}" alt="이전 사진" decoding="async" draggable="false">`:''}</div>
+    <div class="photo-swipe-panel"><img class="photo-detail-original photo-swipe-image" src="${src}" alt="사진 ${i+1} 원본" decoding="async" draggable="false"></div>
+    <div class="photo-swipe-panel">${i<PHOTO_ITEMS.length-1?`<img class="photo-swipe-image" src="${PHOTO_ITEMS[i+1]}" alt="다음 사진" decoding="async" draggable="false">`:''}</div>
+   </div>
    <button type="button" class="photo-detail-nav prev" data-photo-step="-1" aria-label="이전 사진" ${i===0?'disabled':''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5.5-6 6.5 6 6.5"/></svg></button>
    <button type="button" class="photo-detail-nav next" data-photo-step="1" aria-label="다음 사진" ${i===PHOTO_ITEMS.length-1?'disabled':''}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 5.5 6 6.5-6 6.5"/></svg></button>
   </div>
@@ -3907,6 +3919,7 @@ function deleteCurrentPhoto(){
  top.p={index:Math.min(index,PHOTO_ITEMS.length-1)};render('');
 }
 function goPhotoIndex(index){
+ if(photoSwipeBusy)return;
  const i=Math.max(0,Math.min(PHOTO_ITEMS.length-1,Number(index)||0));
  const top=state.stack[state.stack.length-1];
  if(top.v!=='photoDetail')return;
@@ -5924,7 +5937,7 @@ if('igNinthMore' in t.dataset){return;}
  if('photoIndex' in t.dataset){goPhotoIndex(Number(t.dataset.photoIndex));return;}
  if('photoStep' in t.dataset){
   const top=state.stack[state.stack.length-1];
-  if(top.v==='photoDetail')goPhotoIndex(Number(top.p?.index||0)+Number(t.dataset.photoStep));
+  if(top.v==='photoDetail')animatePhotoToIndex(Number(top.p?.index||0)+Number(t.dataset.photoStep));
   return;
  }
  if('capture' in t.dataset){
@@ -6211,25 +6224,119 @@ viewsEl.addEventListener('pointerup',e=>{
 });
 viewsEl.addEventListener('pointercancel',()=>calSwipeStart=null);
 
+// The stage contains three real photos. During drag it follows the finger;
+// on release the track snaps smoothly to the adjacent photo or springs back.
 let photoSwipeStart=null;
+let photoSwipeBusy=false;
+function photoTrackPosition(track,offset,animated){
+ if(!track)return;
+ track.style.transition=animated?'transform 330ms cubic-bezier(.20,.78,.20,1)':'none';
+ track.style.transform=`translate3d(calc(-33.333333% + ${offset}px),0,0)`;
+}
+function animatePhotoToIndex(targetIndex){
+ const top=state.stack[state.stack.length-1];
+ if(!top||top.v!=='photoDetail'||photoSwipeBusy)return false;
+ const current=Number(top.p?.index||0);
+ const next=Math.max(0,Math.min(PHOTO_ITEMS.length-1,targetIndex));
+ if(next===current)return false;
+ if(Math.abs(next-current)>1){goPhotoIndex(next);return true;}
+ const stage=viewsEl.querySelector('[data-photo-swipe]');
+ const track=stage?.querySelector('[data-photo-track]');
+ if(!stage||!track){goPhotoIndex(next);return true;}
+ photoSwipeBusy=true;
+ const direction=next>current?-1:1;
+ const finish=()=>{
+  if(!track.isConnected||state.stack[state.stack.length-1]?.v!=='photoDetail'){photoSwipeBusy=false;return;}
+  photoSwipeBusy=false;
+  // No second crossfade: the already-slid destination is simply committed.
+  photoTransition=null;
+  top.p={index:next};
+  render('');
+ };
+ let finished=false;
+ const finalize=()=>{if(finished)return;finished=true;track.removeEventListener('transitionend',onEnd);finish();};
+ const onEnd=e=>{if(e.target===track&&e.propertyName==='transform')finalize();};
+ track.addEventListener('transitionend',onEnd);
+ // Double rAF ensures the browser paints the starting position before sliding.
+ photoTrackPosition(track,0,false);
+ requestAnimationFrame(()=>requestAnimationFrame(()=>{
+  if(!track.isConnected){photoSwipeBusy=false;return;}
+  photoTrackPosition(track,direction*stage.clientWidth,!reduce);
+  if(reduce)finalize();
+  else setTimeout(finalize,420);
+ }));
+ return true;
+}
 viewsEl.addEventListener('pointerdown',e=>{
- if(state.stack[state.stack.length-1].v!=='photoDetail')return;
- if(!e.target.closest('[data-photo-swipe]')||e.target.closest('[data-photo-step]'))return;
- photoSwipeStart={x:e.clientX,y:e.clientY,id:e.pointerId};
+ if(state.stack[state.stack.length-1]?.v!=='photoDetail'||photoSwipeBusy||!e.isPrimary)return;
+ if(e.pointerType==='mouse'&&e.button!==0)return;
+ const stage=e.target.closest('[data-photo-swipe]');
+ if(!stage||e.target.closest('[data-photo-step]'))return;
+ const track=stage.querySelector('[data-photo-track]');
+ if(!track)return;
+ photoSwipeStart={x:e.clientX,y:e.clientY,id:e.pointerId,time:performance.now(),stage,track,dx:0,dy:0,dragging:false};
+ try{stage.setPointerCapture(e.pointerId);}catch(_){}
 });
-viewsEl.addEventListener('pointerup',e=>{
- if(!photoSwipeStart||state.stack[state.stack.length-1].v!=='photoDetail')return;
- if(e.pointerId!==photoSwipeStart.id)return;
- const dx=e.clientX-photoSwipeStart.x,dy=e.clientY-photoSwipeStart.y;
+viewsEl.addEventListener('pointermove',e=>{
+ const g=photoSwipeStart;
+ if(!g||e.pointerId!==g.id||state.stack[state.stack.length-1]?.v!=='photoDetail')return;
+ const scale=g.stage.getBoundingClientRect().width/g.stage.clientWidth||1;
+ const dx=(e.clientX-g.x)/scale,dy=(e.clientY-g.y)/scale;
+ g.dx=dx;g.dy=dy;
+ if(!g.dragging){
+  if(Math.abs(dx)<5)return;
+  if(Math.abs(dx)<Math.abs(dy)*1.1)return;
+  g.dragging=true;
+ }
+ if(e.cancelable)e.preventDefault();
+ const current=Number(state.stack[state.stack.length-1].p?.index||0);
+ const end=(dx>0&&current===0)||(dx<0&&current===PHOTO_ITEMS.length-1);
+ const limited=Math.max(-g.stage.clientWidth,Math.min(g.stage.clientWidth,end?dx*.22:dx));
+ photoTrackPosition(g.track,limited,false);
+});
+function completePhotoSwipe(e,canceled=false){
+ const g=photoSwipeStart;
+ if(!g||e.pointerId!==g.id)return;
  photoSwipeStart=null;
- if(Math.abs(dx)>45&&Math.abs(dx)>Math.abs(dy)*1.2){
-   const top=state.stack[state.stack.length-1];
-   goPhotoIndex(Number(top.p?.index||0)+(dx<0?1:-1));
-  }else if(Math.abs(dx)<12&&Math.abs(dy)<12){
-   setPhotoImmersive(!photoImmersive);
-  }
-});
-viewsEl.addEventListener('pointercancel',()=>photoSwipeStart=null);
+ if(state.stack[state.stack.length-1]?.v!=='photoDetail'||!g.track.isConnected)return;
+ try{g.stage.releasePointerCapture(g.id);}catch(_){}
+ if(!g.dragging){
+  if(!canceled&&Math.abs(g.dx)<12&&Math.abs(g.dy)<12)setPhotoImmersive(!photoImmersive);
+  return;
+ }
+ const current=Number(state.stack[state.stack.length-1].p?.index||0);
+ const velocity=Math.abs(g.dx)/(Math.max(1,performance.now()-g.time));
+ const committed=!canceled&&(Math.abs(g.dx)>g.stage.clientWidth*.21||(Math.abs(g.dx)>28&&velocity>.45));
+ const next=current+(g.dx<0?1:-1);
+ if(committed&&next>=0&&next<PHOTO_ITEMS.length){
+  // The finger's current transform remains visible, then glides to the edge.
+  photoSwipeBusy=true;
+  const track=g.track;
+  const finalize=()=>{
+   if(done)return;
+   done=true;
+   track.removeEventListener('transitionend',onDone);
+   photoSwipeBusy=false;
+   if(!track.isConnected||state.stack[state.stack.length-1]?.v!=='photoDetail')return;
+   photoTransition=null;
+   state.stack[state.stack.length-1].p={index:next};
+   render('');
+  };
+  let done=false;
+  const onDone=ev=>{if(ev.target===track&&ev.propertyName==='transform')finalize();};
+  track.addEventListener('transitionend',onDone);
+  requestAnimationFrame(()=>{
+   if(!track.isConnected){photoSwipeBusy=false;return;}
+   photoTrackPosition(track,(g.dx<0?-1:1)*g.stage.clientWidth,!reduce);
+   if(reduce)finalize();
+   else setTimeout(finalize,420);
+  });
+ }else{
+  photoTrackPosition(g.track,0,!reduce);
+ }
+}
+viewsEl.addEventListener('pointerup',e=>completePhotoSwipe(e));
+viewsEl.addEventListener('pointercancel',e=>completePhotoSwipe(e,true));
 
 homeBtn.addEventListener('click',()=>{if(Date.now()-lastSwipe<450)return;goHome()});
 $('#relock').addEventListener('click',lockPhone);
